@@ -1,11 +1,27 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import random
 
+# =====================================================================
+# USER CONTROL PANEL
+# =====================================================================
+VALLEY_WIDTH = 4500.0                # Total width of the valley cross-section (m)
+GRID_RESOLUTION_X = 10.0             # Horizontal cell size (m)
+GRID_RESOLUTION_Y = 0.01             # Vertical cell size (m) for tracking layers
+BANKFULL_WIDTH = 60.0                # Channel width (m)
+BANKFULL_DEPTH = 3.0                 # Channel depth (m)
+CHANNEL_AGGRADATION_RATE = 0.004     # Aggradation rate per annual flood (m)
+MAX_TIME = 11000                     # Total simulation time (years)
+PLOT_MODE = 'animation'             # 'final_only' or 'animation'
+ANIMATION_FILENAME = 'alluvial_architecture.gif'
+FINAL_PLOT_FILENAME = 'alluvial_architecture_output.png'
+# =====================================================================
+
 class AlluvialModel:
-    def __init__(self, valley_width=4500.0, grid_resolution_x=10.0, grid_resolution_y=0.01,
-                 bankfull_width=60.0, bankfull_depth=3.0, channel_aggradation_rate=0.004,
-                 max_time=11000):
+    def __init__(self, valley_width=VALLEY_WIDTH, grid_resolution_x=GRID_RESOLUTION_X, grid_resolution_y=GRID_RESOLUTION_Y,
+                 bankfull_width=BANKFULL_WIDTH, bankfull_depth=BANKFULL_DEPTH, channel_aggradation_rate=CHANNEL_AGGRADATION_RATE,
+                 max_time=MAX_TIME):
         """
         Initialize the alluvial architecture model.
         Default values based on Trinity River near Dallas, TX (X-sec A).
@@ -232,13 +248,21 @@ if __name__ == "__main__":
     import time
 
     print("Initializing Alluvial Architecture Model...")
-    # Initialize the model with parameters from the ERDC report
-    model = AlluvialModel(max_time=11000)
+    model = AlluvialModel(max_time=MAX_TIME)
 
     current_time = 0.0
 
     print(f"Running simulation for {model.max_time} years...")
     start_time = time.time()
+
+    # Store history for animation
+    history_time = []
+    history_elevation = []
+    history_sand = []
+    history_silt = []
+
+    save_interval = max(1, model.max_time // 100) # Save ~100 frames for animation
+    next_save_time = 0.0
 
     while current_time < model.max_time:
         # 1. Meander and determine time step
@@ -257,32 +281,70 @@ if __name__ == "__main__":
         # 5. Apply subsidence
         model.apply_subsidence(dt)
 
+        if current_time >= next_save_time and PLOT_MODE == 'animation':
+            # Compute current thickness for animation frame
+            sand_th = np.zeros(model.nx)
+            silt_th = np.zeros(model.nx)
+            for i in range(model.nx):
+                sand_th[i] = sum([thickness for stype, thickness in model.stratigraphy[i] if stype == 2])
+                silt_th[i] = sum([thickness for stype, thickness in model.stratigraphy[i] if stype == 1])
+            history_time.append(current_time)
+            history_elevation.append(np.copy(model.elevation))
+            history_sand.append(sand_th)
+            history_silt.append(silt_th)
+            next_save_time += save_interval
+
     print(f"Simulation completed in {time.time() - start_time:.2f} seconds.")
 
-    # Analyze the result
     x_coords = np.arange(model.nx) * model.dx
-    final_elevation = model.elevation
 
-    # Plotting stratigraphy conceptually
-    # We will compute the total sand (type 2) and silt (type 1) thickness at each column
-    sand_thickness = np.zeros(model.nx)
-    silt_thickness = np.zeros(model.nx)
+    if PLOT_MODE == 'final_only':
+        final_elevation = model.elevation
+        sand_thickness = np.zeros(model.nx)
+        silt_thickness = np.zeros(model.nx)
 
-    for i in range(model.nx):
-        sand = sum([thickness for stype, thickness in model.stratigraphy[i] if stype == 2])
-        silt = sum([thickness for stype, thickness in model.stratigraphy[i] if stype == 1])
-        sand_thickness[i] = sand
-        silt_thickness[i] = silt
+        for i in range(model.nx):
+            sand_thickness[i] = sum([thickness for stype, thickness in model.stratigraphy[i] if stype == 2])
+            silt_thickness[i] = sum([thickness for stype, thickness in model.stratigraphy[i] if stype == 1])
 
-    plt.figure(figsize=(10, 6))
-    plt.fill_between(x_coords, 0, silt_thickness, color='tan', label='Floodplain Deposits (Silt/Clay)')
-    plt.fill_between(x_coords, silt_thickness, silt_thickness + sand_thickness, color='orange', label='Channel Deposits (Sand)')
-    plt.plot(x_coords, final_elevation, color='black', label='Final Topography')
+        plt.figure(figsize=(10, 6))
+        plt.fill_between(x_coords, 0, silt_thickness, color='tan', label='Floodplain Deposits (Silt/Clay)')
+        plt.fill_between(x_coords, silt_thickness, silt_thickness + sand_thickness, color='orange', label='Channel Deposits (Sand)')
+        plt.plot(x_coords, final_elevation, color='black', label='Final Topography')
 
-    plt.title('Simulated Alluvial Architecture')
-    plt.xlabel('Cross-valley Distance (m)')
-    plt.ylabel('Elevation / Thickness (m)')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('alluvial_architecture_output.png')
-    print("Saved output plot to 'alluvial_architecture_output.png'.")
+        plt.title('Simulated Alluvial Architecture')
+        plt.xlabel('Cross-valley Distance (m)')
+        plt.ylabel('Elevation / Thickness (m)')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(FINAL_PLOT_FILENAME)
+        print(f"Saved output plot to '{FINAL_PLOT_FILENAME}'.")
+
+    elif PLOT_MODE == 'animation':
+        print("Generating animation...")
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        def update(frame):
+            ax.clear()
+            silt_th = history_silt[frame]
+            sand_th = history_sand[frame]
+            elev = history_elevation[frame]
+
+            ax.fill_between(x_coords, 0, silt_th, color='tan', label='Floodplain Deposits (Silt/Clay)')
+            ax.fill_between(x_coords, silt_th, silt_th + sand_th, color='orange', label='Channel Deposits (Sand)')
+            ax.plot(x_coords, elev, color='black', label='Topography')
+
+            # Keep axes stable
+            max_elev = np.max(history_elevation[-1]) * 1.1
+            ax.set_ylim(0, max_elev if max_elev > 0 else 10)
+            ax.set_xlim(0, VALLEY_WIDTH)
+
+            ax.set_title(f"Simulated Alluvial Architecture (Time: {history_time[frame]:.0f} years)")
+            ax.set_xlabel("Cross-valley Distance (m)")
+            ax.set_ylabel("Elevation / Thickness (m)")
+            ax.legend(loc='upper right')
+            ax.grid(True)
+
+        ani = animation.FuncAnimation(fig, update, frames=len(history_time), repeat=False)
+        ani.save(ANIMATION_FILENAME, writer='pillow', fps=10)
+        print(f"Saved animation to '{ANIMATION_FILENAME}'.")
